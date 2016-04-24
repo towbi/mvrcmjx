@@ -41,7 +41,7 @@ my $REGEX_IMPORT_STATEMENT = qr/
 /xs;
 
 # hashes for cashing
-my $package_class_map = {};
+my $PACKAGE_CLASS_MAP = {};
 
 #
 # parse command line options and perform checks
@@ -212,7 +212,7 @@ sub get_class_info_from_location {
 
     $file = canonpath($file);
 
-    return $package_class_map->{$file} if $package_class_map->{$file} and not $no_cache;
+    return $PACKAGE_CLASS_MAP->{$file} if $PACKAGE_CLASS_MAP->{$file} and not $no_cache;
 
     my $class = basename($file, ('.java', '.xtend'));
     die "Invalid class name '$class'.\n" if $class !~ /^\w+$/;
@@ -221,12 +221,12 @@ sub get_class_info_from_location {
     $package =~ s/\//\./g;
     die "Invalid package name '$package'.\n" if $package !~ /^[\w\.]+$/;
 
-    $package_class_map->{$file} = {
+    $PACKAGE_CLASS_MAP->{$file} = {
         package => $package,
         class => $class,
         canonical_class => "$package.$class"
     };
-    return $package_class_map->{$file};
+    return $PACKAGE_CLASS_MAP->{$file};
 }
 
 sub get_class_info_from_contents {
@@ -235,7 +235,7 @@ sub get_class_info_from_contents {
 
     #print "Getting class info for $file\n" if $verbose;
 
-    return $package_class_map->{$file} if $package_class_map->{$file} and not $no_cache;
+    return $PACKAGE_CLASS_MAP->{$file} if $PACKAGE_CLASS_MAP->{$file} and not $no_cache;
 
     open my $fh, '<', $file or die "Unable to open '$file' for reading: $!\n";
     my ($package, $imports, $class);
@@ -279,13 +279,13 @@ sub get_class_info_from_contents {
     close $fh;
 
     if ($package and $class) {
-        $package_class_map->{$file} = {
+        $PACKAGE_CLASS_MAP->{$file} = {
             package => $package,
             class   => $class,
             canonical_class => "$package.$class->{class}",
             imports => $imports
         };
-        return $package_class_map->{$file};
+        return $PACKAGE_CLASS_MAP->{$file};
     }
     else {
         warn "Skipping '$file' because it is not well-formed.\n";
