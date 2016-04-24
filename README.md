@@ -56,7 +56,20 @@ should be easy to correct, though.
 
     Prints the manual page and exits.
 
-# DESCRIPTION
+# AUTHOR
 
-**This program** will read the given input file(s) and do something
-useful with the contents thereof.
+    Tobias Mahnke-Nissen <tn@movb.de>
+
+# COPYRIGHT AND LICENSE
+
+mvrcmjx, Copyright (C) 2016 Tobias Mahnke-Nissen <tn@movb.de>
+
+mvrcmjx is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the
+[GNU General Public License](http://www.gnu.org/licenses/) for more details.
