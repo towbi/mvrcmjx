@@ -48,13 +48,21 @@ should be easy to correct, though.
 
     Prints verbose messages during refactoring.
 
-- **-help**
+- **-h, --help**
 
     Prints a brief help message and exits.
 
-- **-man**
+- **-m, --man**
 
     Prints the manual page and exits.
+
+# EXAMPLES
+
+    tobi@devel:~/dev/projectX/src/main/java/de/movb/projectx$ mvrcmjx data/type/MyType.xtend data/type/deprecated/MyTypeDeprecated.xtend
+    de/movb/projectx/data/type/MyType.xtend: moving to 'de.movb.projects.data.type.deprecatedMyTypeDeprecated'.
+    de/movb/projectx/app/Gui.java: changing import.
+    de/movb/projectx/app/main/DataDialog.java: changing import.
+    de/movb/projectx/app/main/DataConfirmDialog.java: changing import.
 
 # AUTHOR
 

@@ -427,15 +427,23 @@ Use SVN to perform the actual file moving. The default is to use system calls.
 
 Prints verbose messages during refactoring.
 
-=item B<-help>
+=item B<-h, --help>
 
 Prints a brief help message and exits.
 
-=item B<-man>
+=item B<-m, --man>
 
 Prints the manual page and exits.
 
 =back
+
+=head1 EXAMPLES
+
+  tobi@devel:~/dev/projectX/src/main/java/de/movb/projectx$ mvrcmjx data/type/MyType.xtend data/type/deprecated/MyTypeDeprecated.xtend
+  de/movb/projectx/data/type/MyType.xtend: moving to 'de.movb.projects.data.type.deprecated.MyTypeDeprecated'.
+  de/movb/projectx/app/Gui.java: changing import.
+  de/movb/projectx/app/main/DataDialog.java: changing import.
+  de/movb/projectx/app/main/DataConfirmDialog.java: changing import.
 
 =head1 AUTHOR
 
