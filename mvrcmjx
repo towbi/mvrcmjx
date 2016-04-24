@@ -1,0 +1,445 @@
+#!/usr/bin/env perl
+
+use Modern::Perl;
+use Getopt::Long qw(GetOptions);
+use Pod::Usage qw(pod2usage);
+use Data::Dumper;
+use File::Basename qw(basename dirname fileparse);
+use File::Spec::Functions qw(rel2abs abs2rel canonpath catfile);
+use File::Find qw(find);
+use File::Temp qw(tempfile);
+use File::Copy qw(copy move);
+use File::Path qw(make_path);
+
+# global variables in capital letters are used in closures
+
+my $NAME = 'mvrcmjx';
+
+# regex for package definition
+my $REGEX_PACKAGE_DEFINITION = qr/
+    ^\s*package\s+  # package keyword
+    ([\w\.]+)\s*    # package name ($1)
+    (;?\s*\R)$      # end of line ($2)
+/xs;
+
+# regex for class (or enum, interface, annotation) declaration
+my $REGEX_CLASS_DECLARATION = qr/
+    ^\s*(\w+\s)*               # modifiers at the beginning
+    (class|\@interface|        # keyword for class, annotation,
+      interface|enum)          #   interface or enum ($2)
+    (\s*<.+?>)?                # maybe type parameter
+    \s+(\w+)                   # name of the thing ($4)
+    (\s*<\w+>)?                # maybe parameterized type
+    (((\s*\{)|(\s+.*))\s*\R)$  # end of line ("}" or just "\R") ($6)
+/xs;
+
+# regex for import statement (no wild card, imported class is in $2)
+my $REGEX_IMPORT_STATEMENT = qr/
+    ^\s*import\s+  # import statement at the beginning
+    (\w+\s+)*      # maybe followed by modifiers ($1)
+    ([\w\.]+)\s*   # name of the imported class ($2)
+    (;?\s*\R)$        # end of line ($3)
+/xs;
+
+# hashes for cashing
+my $package_class_map = {};
+
+#
+# parse command line options and perform checks
+#
+
+my ($BASE, $SVN, $VERBOSE, $help, $man);
+
+GetOptions (
+    'base=s'  => \$BASE,
+    'svn'     => \$SVN,
+    'verbose' => \$VERBOSE,
+    'help'    => \$help,
+    'man'     => \$man
+) or die("Error in command line arguments\n");
+pod2usage(0) if $help;
+pod2usage(-exitval => 0, -verbose => 2) if $man;
+
+my $from = $ARGV[0];
+my $to = $ARGV[1];
+pod2usage(1) if not $from or not $to;
+
+die "Source file '$from' doesn't exist.\n" if not -e $from;
+die "Target file '$to' exists.\n" if -e $to;
+
+die "SVN move not yet implemented.\n" if $SVN;
+
+#
+# change to base directory and translate $from and $to into relative paths
+#
+
+$from = rel2abs($from);
+$to = rel2abs($to);
+if (not $BASE) {
+    $BASE = get_base($from) unless $BASE;
+    print "Detected source base directory '$BASE'.\n" if $VERBOSE;
+}
+chdir $BASE;
+$from = abs2rel($from);
+$to = abs2rel($to);
+
+my $FROM_CLASS = get_class_info_from_contents($from);
+my $TO_CLASS = get_class_info_from_location($to);
+
+#
+# move class
+#
+
+move_class($from, $FROM_CLASS, $TO_CLASS);
+
+#
+# find all source code files and change imports
+#
+
+find { wanted => \&update_import, no_chdir => 1 }, '.';
+
+sub update_import {
+    my $file = $_;
+
+    # ignore non-source files
+    return if not -e or $file !~ /\.(java|xtend)$/;
+
+    my $class_info_from_location = get_class_info_from_location($file, 1);
+    my $class_info_from_contents = get_class_info_from_contents($file, 1);
+
+    if ($class_info_from_location->{canonical_class} ne $class_info_from_contents->{canonical_class}) {
+        warn "$_: class definition doesn't match file location.\n" if $VERBOSE;
+    }
+
+    if (grep { $_->{canonical_class} eq $FROM_CLASS->{canonical_class} }
+            @{$class_info_from_contents->{imports}}) {
+        change_import($file, $FROM_CLASS, $TO_CLASS);
+    }
+}
+
+#
+# functions
+#
+
+sub _refactoring_helper {
+    my $file = shift;
+    my $changer = shift;
+
+    open my $fh_old, '<', $file or die "Unable to open '$file' for reading: $!\n";
+    
+    my ($fh_new, $tempfile) = tempfile(
+        basename($file) . "-${NAME}XXXX",
+        DIR    => catfile($BASE, dirname($file)),
+        UNLINK => 1
+    );
+
+    print $changer->($fh_old, $fh_new);
+
+    close $fh_new;
+    close $fh_old;
+    copy $tempfile, $file;
+}
+
+sub change_import {
+    my $file = shift;
+    my $from_class = shift;
+    my $to_class = shift;
+    
+    printf "%s: changing import" . ($VERBOSE ? " of '%s' to '%s'" : '') . ".\n",
+        $file, $from_class->{canonical_class}, $to_class->{canonical_class};
+
+    _refactoring_helper($file, sub {
+        my $fh_old = shift;
+        my $fh_new = shift;
+        
+        while (my $line = <$fh_old>) {
+            my $import = match_import($line);
+            if ($import and $import->{class} eq $from_class->{canonical_class}) {
+                my $new_import_statement = "import $import->{modifiers} $to_class->{canonical_class}$import->{eol}";
+                $new_import_statement =~ s/ +/ /g; # compact multiple spaces
+                print $fh_new $new_import_statement;
+            }
+            else {
+                print $fh_new $line;
+            }
+        }
+    });
+}
+
+sub move_class {
+    my $file = shift;
+    my $from_class = shift;
+    my $to_class = shift;
+    
+    printf "%s: moving to '%s'.\n", $file, $to_class->{canonical_class};
+
+    # change package and class declarations
+    _refactoring_helper($file, sub {
+        my $fh_old = shift;
+        my $fh_new = shift;
+        
+        my ($package, $class);
+        while (my $line = <$fh_old>) {
+            # package definition
+            if (not $package and $package = match_package($line)) {
+                my $class_components = break_up_canonical_class($to_class->{canonical_class});
+                print $fh_new "package $class_components->{package}$package->{eol}";
+            }
+            # class declaration
+            elsif (not $class and $class = match_class($line)) {
+                my $new_class_declaration =
+                    ($class->{modifiers} ? "$class->{modifiers} " : '') .
+                    "$class->{type} $to_class->{class}$class->{eol}";
+                $new_class_declaration =~ s/ +/ /g; # compact multiple spaces
+                print $fh_new $new_class_declaration;
+            }
+            else {
+                print $fh_new $line;
+            }
+        }
+    });
+
+    # move file
+    my ($old_filename, $old_path, $old_ext) = fileparse($file, ('.java', '.xtend'));
+    my $new_file = catfile(split('\.', $to_class->{canonical_class})) . $old_ext;
+    my $new_path = dirname($new_file);
+    make_path($new_path) if not -d $new_path;
+    move($file, $new_file);
+}
+
+sub get_class_info_from_location {
+    my $file = shift;
+    my $no_cache = shift;
+
+    $file = canonpath($file);
+
+    return $package_class_map->{$file} if $package_class_map->{$file} and not $no_cache;
+
+    my $class = basename($file, ('.java', '.xtend'));
+    die "Invalid class name '$class'.\n" if $class !~ /^\w+$/;
+
+    my $package = dirname($file);
+    $package =~ s/\//\./g;
+    die "Invalid package name '$package'.\n" if $package !~ /^[\w\.]+$/;
+
+    $package_class_map->{$file} = {
+        package => $package,
+        class => $class,
+        canonical_class => "$package.$class"
+    };
+    return $package_class_map->{$file};
+}
+
+sub get_class_info_from_contents {
+    my $file = shift;
+    my $no_cache = shift;
+
+    #print "Getting class info for $file\n" if $verbose;
+
+    return $package_class_map->{$file} if $package_class_map->{$file} and not $no_cache;
+
+    open my $fh, '<', $file or die "Unable to open '$file' for reading: $!\n";
+    my ($package, $imports, $class);
+    while (my $line = <$fh>) {
+        # package definition
+        if ($line =~ $REGEX_PACKAGE_DEFINITION) {
+            if (not $package and not $imports and not $class) {
+                $package = $1;
+            }
+            else {
+                warn "Skipping '$file' because it is not well-formed (package definition).\n";
+                return;
+            }
+        }
+        
+        # import statement
+        if (my $matched_import = match_import($line)) {
+            if ($package and not $class) {
+                $imports = [] if not $imports;
+                push @$imports, break_up_canonical_class($matched_import->{class});
+            }
+            else {
+                warn "Skipping '$file' because it is not well-formed (import statement).\n";
+                return;
+            }
+        }
+        
+        # class declaration
+        if (my $matched_class = match_class($line)) {
+            if ($package and not $class) {
+                $class = $matched_class;
+            }
+            else {
+                warn "Skipping '$file' because it is not well-formed (class declaration).\n";
+                return;
+            }
+        }
+
+        last if $class;
+    }
+    close $fh;
+
+    if ($package and $class) {
+        $package_class_map->{$file} = {
+            package => $package,
+            class   => $class,
+            canonical_class => "$package.$class->{class}",
+            imports => $imports
+        };
+        return $package_class_map->{$file};
+    }
+    else {
+        warn "Skipping '$file' because it is not well-formed.\n";
+    }
+}
+
+sub break_up_canonical_class {
+    my $canonical_class = shift;
+    
+    if ($canonical_class =~ /(\w+(\.\w+)*)\.([A-Z]\w+)/) {
+        return {
+            package => $1,
+            class   => $3,
+            canonical_class => "$1.$3"
+        }
+    }
+    else {
+        warn "Invalid class '$canonical_class'.\n";
+    }
+}
+
+sub match_import {
+    my $line = shift;
+
+    if ($line =~ $REGEX_IMPORT_STATEMENT) {
+        return {
+            modifiers => ($1 or ''),
+            class => $2,
+            eol => $3
+        };
+    }
+}
+
+sub match_class {
+    my $line = shift;
+    
+    if ($line =~ $REGEX_CLASS_DECLARATION) {
+        return {
+            modifiers => ($1 or ''),
+            type => $2,
+            class => $4,
+            eol => $6
+        };
+    }
+}
+
+sub match_package {
+    my $line = shift;
+    
+    if ($line =~ $REGEX_PACKAGE_DEFINITION) {
+        return {
+            package => $1,
+            eol => $2
+        };
+    }
+}
+
+sub get_base {
+    my $file_below_base = shift;
+    my $base = 'java';
+
+    my $curdir = dirname($file_below_base);
+    for (my $i = 0; $i < 1234; $i++) {
+        if (basename($curdir) eq $base) {
+            return $curdir;
+        }
+        $curdir = dirname($curdir);
+    }
+
+    warn "Unable to get base dir '$base'.\n";
+}
+
+sub get_file_basename_from_canonical_class {
+    my $class = shift;
+    
+    catfile(split('.', $class))
+}
+
+__END__
+=head1 NAME
+
+mvrcmjx - Move and refactor classes in mixed Java and Xtend projects
+
+=head1 SYNOPSIS
+
+mvrcmjx [options] from to
+
+ Options:
+   -b, --base dir        base directory
+
+=for comment
+   -s, --svn             use SVN move
+
+   -v, --verbose         verbose messages
+   -h, --help            brief help message
+   -m, --man             full documentation
+
+=head1 DESCRIPTION
+
+mvrcmjx is a command line utility to move and refactor classes in mixed Java
+and Xtend projects.
+
+mvrcmjx expects one top level class declaration per source file and the file's
+basename to match the class name. This is a requirement in pure Java projects,
+but not in Xtend projects. mvrcmjx tries to detect mismatches in Xtend files
+and skips those file. Not all mismatches will be found, however, and the
+project might not perform the refactoring correctly.
+
+mvrcmjx also ignores wild card import statements, i.e. if the class to refactor
+was imported by a wild card, that import has to be done manually.
+
+mvrcmjx does not add imports that become necessary when a class is moved out of
+a package with dependencies in that package. Consequently it also does not
+remove imports that become unnecessary after a move.
+
+In other words: mvrcmjx works most of the time (especially if you follow common
+best practices), but might leave your project with compilation errors. These
+should be easy to correct, though.
+
+=head1 OPTIONS
+
+=over 8
+
+=item B<-b, --base dir>
+
+Sets the source code base directory, i.e. the directory from which on the
+directory structure reflects the project's package structure. The default is
+for mvrcmjx to ascend the directory structure until a directory 'java' is
+found and use it as the base directory.
+
+=for comment
+=item B<-s, --svn>
+
+=for comment
+Use SVN to perform the actual file moving. The default is to use system calls.
+
+=item B<-v, --verbose>
+
+Prints verbose messages during refactoring.
+
+=item B<-help>
+
+Prints a brief help message and exits.
+
+=item B<-man>
+
+Prints the manual page and exits.
+
+=back
+
+=head1 DESCRIPTION
+
+B<This program> will read the given input file(s) and do something
+useful with the contents thereof.
+
+=cut
