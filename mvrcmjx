@@ -386,7 +386,7 @@ and Xtend projects.
 mvrcmjx expects one top level class declaration per source file and the file's
 basename to match the class name. This is a requirement in pure Java projects,
 but not in Xtend projects. mvrcmjx tries to detect mismatches in Xtend files
-and skips those file. Due to mvrcmjx (current) limitations not all mismatches
+and skips those file. Due to mvrcmjx's (current) limitations not all mismatches
 will be found, however.
 
 mvrcmjx also ignores wild card import statements, i.e. if the class to refactor
