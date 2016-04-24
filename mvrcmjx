@@ -359,12 +359,6 @@ sub get_base {
     warn "Unable to get base dir '$base'.\n";
 }
 
-sub get_file_basename_from_canonical_class {
-    my $class = shift;
-    
-    catfile(split('.', $class))
-}
-
 __END__
 =head1 NAME
 
