@@ -8,6 +8,7 @@ mvrcmjx - Move and refactor classes in mixed Java and Xtend projects
 
     Options:
       -b, --base dir        base directory
+      -d, --dryrun          perform a dry run
 
     -v, --verbose         verbose messages
     -h, --help            brief help message
@@ -43,6 +44,11 @@ should be easy to correct, though.
     directory structure reflects the project's package structure. The default is
     for mvrcmjx to ascend the directory structure until a directory 'java' is
     found and use it as the base directory.
+
+- **-d, --dryrun**
+
+    Perform a dry run, i.e. do not modify any files and print only what would be
+    done. --dryrun implies --verbose.
 
 - **-v, --verbose**
 
