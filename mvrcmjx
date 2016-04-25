@@ -1,10 +1,27 @@
 #!/usr/bin/env perl
 
+# mvrcmjx -- Move and refactor classes in mixed Java and Xtend projects
+#
+# Copyright (C) 2016 by Tobias Mahnke-Nissen <tn@movb.de>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
 use Modern::Perl;
 use Getopt::Long qw(GetOptions);
 use Pod::Usage qw(pod2usage);
 use File::Basename qw(basename dirname fileparse);
-use File::Spec::Functions qw(rel2abs abs2rel canonpath catfile);
+use File::Spec::Functions qw(rel2abs abs2rel canonpath catfile splitdir);
 use File::Find qw(find);
 use File::Temp qw(tempfile);
 use File::Copy qw(copy move);
@@ -14,7 +31,9 @@ use File::Path qw(make_path);
 
 my $NAME = 'mvrcmjx';
 
-# regex for package definition
+my @SUFFIXES = ('.xtend', '.java');
+
+# regex for package declaration
 my $REGEX_PACKAGE_DEFINITION = qr/
     ^\s*package\s+  # package keyword
     ([\w\.]+)\s*    # package name ($1)
@@ -32,25 +51,28 @@ my $REGEX_CLASS_DECLARATION = qr/
     (((\s*\{)|(\s+.*))\s*\R)$  # end of line ("}" or just "\R") ($6)
 /xs;
 
-# regex for import statement (no wild card, imported class is in $2)
+# regex for import statement (no wild card)
 my $REGEX_IMPORT_STATEMENT = qr/
     ^\s*import\s+  # import statement at the beginning
     (\w+\s+)*      # maybe followed by modifiers ($1)
     ([\w\.]+)\s*   # name of the imported class ($2)
-    (;?\s*\R)$        # end of line ($3)
+    (;?\s*\R)$     # end of line ($3)
 /xs;
 
-# hashes for cashing
+my $_SUFFIXES_REGEX = join('|', map { (my $r = $_) =~ s/\./\\./g; "($r)" } @SUFFIXES) . '$';
+
+# hash for caching
 my $PACKAGE_CLASS_MAP = {};
 
 #
 # parse command line options and perform checks
 #
 
-my ($BASE, $SVN, $VERBOSE, $help, $man);
+my ($BASE, $SVN, $VERBOSE, $DRYRUN, $help, $man);
 
 GetOptions (
     'base=s'  => \$BASE,
+    'dryrun'  => \$DRYRUN,
     'svn'     => \$SVN,
     'verbose' => \$VERBOSE,
     'help'    => \$help,
@@ -59,17 +81,26 @@ GetOptions (
 pod2usage(0) if $help;
 pod2usage(-exitval => 0, -verbose => 2) if $man;
 
+die "SVN move not yet implemented.\n" if $SVN;
+
+# source and target must be provided
 my $from = $ARGV[0];
 my $to = $ARGV[1];
 pod2usage(1) if not $from or not $to;
 
+# source must exist, target must not
 die "Source file '$from' doesn't exist.\n" if not -e $from;
 die "Target file '$to' exists.\n" if -e $to;
 
-die "SVN move not yet implemented.\n" if $SVN;
+# source and target must habve the same extension
+my ($from_name, $from_dirs, $from_suffix) = fileparse($from, @SUFFIXES);
+my ($to_name, $to_dirs, $to_suffix) = fileparse($to, @SUFFIXES);
+die "Source and target file must have the same extension.\n"
+    if $from_suffix ne $to_suffix;
 
 #
 # change to base directory and translate $from and $to into relative paths
+# starting from $BASE
 #
 
 $from = rel2abs($from);
@@ -101,13 +132,13 @@ sub update_import {
     my $file = $_;
 
     # ignore non-source files
-    return if not -e or $file !~ /\.(java|xtend)$/;
+    return if not -e or $file !~ $_SUFFIXES_REGEX;
 
     my $class_info_from_location = get_class_info_from_location($file, 1);
     my $class_info_from_contents = get_class_info_from_contents($file, 1);
 
     if ($class_info_from_location->{canonical_class} ne $class_info_from_contents->{canonical_class}) {
-        warn "$_: class definition doesn't match file location.\n" if $VERBOSE;
+        warn "$_: class declaration doesn't match file location.\n" if $VERBOSE;
     }
 
     if (grep { $_->{canonical_class} eq $FROM_CLASS->{canonical_class} }
@@ -125,18 +156,23 @@ sub _refactoring_helper {
     my $changer = shift;
 
     open my $fh_old, '<', $file or die "Unable to open '$file' for reading: $!\n";
-    
-    my ($fh_new, $tempfile) = tempfile(
-        basename($file) . "-${NAME}XXXX",
-        DIR    => catfile($BASE, dirname($file)),
-        UNLINK => 1
-    );
 
-    print $changer->($fh_old, $fh_new);
+    my ($fh_new, $tempfile);
+    if (not $DRYRUN) {
+        ($fh_new, $tempfile) = tempfile(
+            basename($file) . "-${NAME}XXXX",
+            DIR    => catfile($BASE, dirname($file)),
+            UNLINK => 1
+        );
+    }
 
-    close $fh_new;
+    $changer->($fh_old, $fh_new);
+
     close $fh_old;
-    copy $tempfile, $file;
+    if (not $DRYRUN) {
+        close $fh_new;
+        copy $tempfile, $file;
+    }
 }
 
 sub change_import {
@@ -156,10 +192,10 @@ sub change_import {
             if ($import and $import->{class} eq $from_class->{canonical_class}) {
                 my $new_import_statement = "import $import->{modifiers} $to_class->{canonical_class}$import->{eol}";
                 $new_import_statement =~ s/ +/ /g; # compact multiple spaces
-                print $fh_new $new_import_statement;
+                print $fh_new $new_import_statement if not $DRYRUN;
             }
             else {
-                print $fh_new $line;
+                print $fh_new $line if not $DRYRUN;
             }
         }
     });
@@ -179,10 +215,10 @@ sub move_class {
         
         my ($package, $class);
         while (my $line = <$fh_old>) {
-            # package definition
+            # package declaration
             if (not $package and $package = match_package($line)) {
                 my $class_components = break_up_canonical_class($to_class->{canonical_class});
-                print $fh_new "package $class_components->{package}$package->{eol}";
+                print $fh_new "package $class_components->{package}$package->{eol}" if not $DRYRUN;
             }
             # class declaration
             elsif (not $class and $class = match_class($line)) {
@@ -190,20 +226,20 @@ sub move_class {
                     ($class->{modifiers} ? "$class->{modifiers} " : '') .
                     "$class->{type} $to_class->{class}$class->{eol}";
                 $new_class_declaration =~ s/ +/ /g; # compact multiple spaces
-                print $fh_new $new_class_declaration;
+                print $fh_new $new_class_declaration if not $DRYRUN;
             }
             else {
-                print $fh_new $line;
+                print $fh_new $line if not $DRYRUN;
             }
         }
     });
 
     # move file
-    my ($old_filename, $old_path, $old_ext) = fileparse($file, ('.java', '.xtend'));
+    my ($old_filename, $old_path, $old_ext) = fileparse($file, @SUFFIXES);
     my $new_file = catfile(split('\.', $to_class->{canonical_class})) . $old_ext;
     my $new_path = dirname($new_file);
-    make_path($new_path) if not -d $new_path;
-    move($file, $new_file);
+    make_path($new_path) if not -d $new_path and not $DRYRUN;
+    move($file, $new_file) if not $DRYRUN;
 }
 
 sub get_class_info_from_location {
@@ -214,11 +250,10 @@ sub get_class_info_from_location {
 
     return $PACKAGE_CLASS_MAP->{$file} if $PACKAGE_CLASS_MAP->{$file} and not $no_cache;
 
-    my $class = basename($file, ('.java', '.xtend'));
+    my $class = basename($file, @SUFFIXES);
     die "Invalid class name '$class'.\n" if $class !~ /^\w+$/;
 
-    my $package = dirname($file);
-    $package =~ s/\//\./g;
+    my $package = join ('.', splitdir(dirname($file)));
     die "Invalid package name '$package'.\n" if $package !~ /^[\w\.]+$/;
 
     $PACKAGE_CLASS_MAP->{$file} = {
@@ -233,20 +268,18 @@ sub get_class_info_from_contents {
     my $file = shift;
     my $no_cache = shift;
 
-    #print "Getting class info for $file\n" if $verbose;
-
     return $PACKAGE_CLASS_MAP->{$file} if $PACKAGE_CLASS_MAP->{$file} and not $no_cache;
 
     open my $fh, '<', $file or die "Unable to open '$file' for reading: $!\n";
     my ($package, $imports, $class);
     while (my $line = <$fh>) {
-        # package definition
+        # package declaration
         if ($line =~ $REGEX_PACKAGE_DEFINITION) {
             if (not $package and not $imports and not $class) {
                 $package = $1;
             }
             else {
-                warn "Skipping '$file' because it is not well-formed (package definition).\n";
+                warn "Skipping '$file' because it is not well-formed (package declaration).\n";
                 return;
             }
         }
@@ -369,6 +402,7 @@ mvrcmjx - Move and refactor classes in mixed Java and Xtend projects
 
  Options:
    -b, --base dir        base directory
+   -d, --dryrun          perform a dry run
 
 =for comment
    -s, --svn             use SVN move
@@ -409,6 +443,11 @@ Sets the source code base directory, i.e. the directory from which on the
 directory structure reflects the project's package structure. The default is
 for mvrcmjx to ascend the directory structure until a directory 'java' is
 found and use it as the base directory.
+
+=item B<-d, --dryrun>
+
+Perform a dry run, i.e. do not modify any files and print only what would be
+done. --dryrun implies --verbose.
 
 =for comment
 =item B<-s, --svn>
