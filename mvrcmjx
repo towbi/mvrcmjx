@@ -59,7 +59,7 @@ my $REGEX_IMPORT_STATEMENT = qr/
     (;?\s*\R)$     # end of line ($3)
 /xs;
 
-my $_SUFFIXES_REGEX = join('|', map { (my $r = $_) =~ s/\./\\./g; "($r)" } @SUFFIXES) . '$';
+my $_SUFFIXES_REGEX = join('|', map { (my $r = $_) =~ s/\./\\./g; "($r\$)" } @SUFFIXES);
 
 # hash for caching
 my $PACKAGE_CLASS_MAP = {};
@@ -88,11 +88,21 @@ my $from = $ARGV[0];
 my $to = $ARGV[1];
 pod2usage(1) if not $from or not $to;
 
-# source must exist, target must not
+# source must exist, target must not (if it's a file)
 die "Source file '$from' doesn't exist.\n" if not -e $from;
-die "Target file '$to' exists.\n" if -e $to;
+die "Source must be a file.\n" if not -f $from;
+die "Target file '$to' exists.\n" if -f $to;
 
-# source and target must habve the same extension
+# create target (dir) if it doesn't exist
+make_path($to) if not -f $to and not -d $to;
+
+# translate $to into a file
+if (-d $to) {
+    $to = catfile($to, basename($from));
+    die "Target file '$to' exists.\n" if -f $to;
+}
+
+# source and target must have the same extension
 my ($from_name, $from_dirs, $from_suffix) = fileparse($from, @SUFFIXES);
 my ($to_name, $to_dirs, $to_suffix) = fileparse($to, @SUFFIXES);
 die "Source and target file must have the same extension.\n"
@@ -115,6 +125,8 @@ $to = abs2rel($to);
 
 my $FROM_CLASS = get_class_info_from_contents($from);
 my $TO_CLASS = get_class_info_from_location($to);
+die "Invalid source '$from'.\n" if not $FROM_CLASS;
+die "Invalid target '$to'.\n" if not $TO_CLASS;
 
 #
 # move class
@@ -322,6 +334,7 @@ sub get_class_info_from_contents {
     }
     else {
         warn "Skipping '$file' because it is not well-formed.\n";
+        return undef;
     }
 }
 
@@ -398,7 +411,7 @@ mvrcmjx - Move and refactor classes in mixed Java and Xtend projects
 
 =head1 SYNOPSIS
 
-  mvrcmjx [options] from_file to_file
+  mvrcmjx [options] from_file to_{file or dir}
 
  Options:
    -b, --base dir        base directory
