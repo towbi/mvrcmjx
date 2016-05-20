@@ -4,7 +4,7 @@ mvrcmjx - Move and refactor classes in mixed Java and Xtend projects
 
 # SYNOPSIS
 
-     mvrcmjx [options] from_file to_file
+     mvrcmjx [options] from_file to_{file or dir}
 
     Options:
       -b, --base dir        base directory
