@@ -1,6 +1,6 @@
 # NAME
 
-mvrcmjx - Move and refactor classes in mixed Java and Xtend projects
+mvrcmjx - Move and refactor classes in (maybe mixed) Java and Xtend projects
 
 # SYNOPSIS
 

@@ -407,7 +407,7 @@ sub get_base {
 __END__
 =head1 NAME
 
-mvrcmjx - Move and refactor classes in mixed Java and Xtend projects
+mvrcmjx - Move and refactor classes in (maybe mixed) Java and Xtend projects
 
 =head1 SYNOPSIS
 
